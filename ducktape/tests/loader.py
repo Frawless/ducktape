@@ -74,7 +74,7 @@ class TestLoader(object):
         # in any discovered test, whether or not it is parametrized
         self.injected_args = injected_args
 
-    def load(self, symbols, excluded_test_symbols=None):
+    def load(self, symbols, excluded_test_symbols=None, excluded_versions=None):
         """
         Discover tests specified by the symbols parameter (iterable of test symbols and/or test suite file paths).
         Skip any tests specified by excluded_test_symbols (iterable of test symbols).
@@ -116,6 +116,7 @@ class TestLoader(object):
 
         :param symbols: iterable that contains test symbols and/or test suite file paths.
         :param excluded_test_symbols: iterable that contains test symbols only.
+        :param excluded_versions: iterable that contains versions only.
         :return list of test context objects found during discovery. Note: if self.repeat is set to n, each test_context
             will appear in the list n times.
         """
@@ -147,6 +148,13 @@ class TestLoader(object):
         if not all_test_context_list:
             raise LoaderException("No tests to run!")
         self.logger.debug("Discovered these tests: " + str(all_test_context_list))
+        self.logger.info("Discovered %s tests" % len(all_test_context_list))
+
+        # Exclude All non-specified Kafkas
+        if excluded_versions is not None:
+            all_test_context_list = self._exclude_non_specified_kafkas(all_test_context_list, excluded_versions)
+            self.logger.info("Discovered %s tests after version exclusion" % len(all_test_context_list))
+
         # Select the subset of tests.
         if self.historical_report:
             # With timing info, try to pack the subsets reasonably evenly based on timing. To do so, get timing info
@@ -600,3 +608,47 @@ class TestLoader(object):
             if dir not in seen_dirs:
                 sys.path.append(dir)
                 seen_dirs.add(dir)
+
+    def _exclude_non_specified_kafkas(self, all_test_context_list, excluded_versions):
+        all_tests_context_list_without_exclusions = []
+        for item in all_test_context_list:
+            if item.injected_args:
+                if self._contains_excluded_versions(item.injected_args, excluded_versions):
+                    self.logger.debug("Excluding: " + str(item))
+                else:
+                    all_tests_context_list_without_exclusions.append(item)
+            else:
+                all_tests_context_list_without_exclusions.append(item)
+
+        return all_tests_context_list_without_exclusions
+
+    def _contains_excluded_versions(self, injected_args, included_versions):
+        included_versions = [symbol.strip() for item in included_versions for symbol in item.split(',')]
+        if isinstance(injected_args, dict):
+            # Check both keys and values in the dictionary
+            for key, value in injected_args.items():
+                if key in included_versions:
+                    return True
+                if isinstance(value, (list, dict)):
+                    if self._contains_excluded_versions(value, included_versions):
+                        return True
+                elif isinstance(value, str):
+                    for excluded_symbol in included_versions:
+                        if excluded_symbol in value:
+                        # if any(excluded_symbol in value for excluded_symbol in excluded_test_symbols):
+                            return True
+                else:
+                    if str(value) in included_versions:
+                        return True
+        elif isinstance(injected_args, list):
+            # Recursively check each item in the list
+            for element in injected_args:
+                if self._contains_excluded_versions(element, included_versions):
+                    return True
+        elif isinstance(injected_args, str):
+            if any(excluded_symbol in injected_args for excluded_symbol in included_versions):
+                return True
+        else:
+            if str(injected_args) in included_versions:
+                return True
+        return False
